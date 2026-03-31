@@ -4,9 +4,6 @@ on:
   schedule:
     - cron: "0 */6 * * *" # Every 6 hours
   workflow_dispatch: # Manual trigger
-  push:
-    branches:
-      - master
 
 jobs:
   sync:
@@ -40,37 +37,58 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Create directories
+          mkdir -p download/x86 download/x64
+          mkdir -p extracted/x86 extracted/x64
+          mkdir -p x86 x64
+
+          # Download x86
           gh release download ${{ steps.get_release.outputs.tag }} \
             --repo AU-Avengers/TOU-Mira \
             --pattern "*x86-steam-itch.zip" \
-            --dir download
+            --dir download/x86
 
-          unzip download/*.zip -d extracted
+          # Download x64
+          gh release download ${{ steps.get_release.outputs.tag }} \
+            --repo AU-Avengers/TOU-Mira \
+            --pattern "*x64-epic-msstore.zip" \
+            --dir download/x64
 
-          # Find and move files
-          find extracted -name "touhats.bundle" -exec cp {} ./touhats.bundle \;
-          find extracted -name "touhats.catalog" -exec cp {} ./touhats.catalog \;
-          git add -N touhats.bundle touhats.catalog
+          # Extract and move files
+          unzip download/x86/*.zip -d extracted/x86
+          find extracted/x86 -name "touhats.bundle" -exec cp {} x86/touhats.bundle \;
+          find extracted/x86 -name "touhats.catalog" -exec cp {} x86/touhats.catalog \;
+
+          unzip download/x64/*.zip -d extracted/x64
+          find extracted/x64 -name "touhats.bundle" -exec cp {} x64/touhats.bundle \;
+          find extracted/x64 -name "touhats.catalog" -exec cp {} x64/touhats.catalog \;
 
       - name: Check for changes
         id: check_changes
         if: steps.get_release.outputs.exists == 'false'
         run: |
-          if [ ! -f touhats.bundle ] || [ ! -f touhats.catalog ]; then
-            echo "changed=true" >> $GITHUB_OUTPUT
-          elif git diff --exit-code touhats.bundle touhats.catalog; then
+          git add -N x86 x64
+          if git diff --exit-code x86 x64; then
             echo "changed=false" >> $GITHUB_OUTPUT
           else
             echo "changed=true" >> $GITHUB_OUTPUT
           fi
         continue-on-error: true
 
+      - name: Prepare Archives
+        if: steps.get_release.outputs.exists == 'false' && steps.check_changes.outputs.changed == 'true'
+        run: |
+          zip -j touhats-x86.zip x86/touhats.bundle x86/touhats.catalog
+          zip -j touhats-x64.zip x64/touhats.bundle x64/touhats.catalog
+
       - name: Commit and Push
         if: steps.get_release.outputs.exists == 'false' && steps.check_changes.outputs.changed == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add touhats.bundle touhats.catalog
+          git add x86/ x64/
+          # Remove top-level files if they exist from previous version
+          git rm --ignore-unmatch touhats.bundle touhats.catalog
           git commit -m "Update assets from TOU-Mira ${{ steps.get_release.outputs.tag }}"
           git push
 
@@ -81,11 +99,11 @@ jobs:
           tag_name: ${{ steps.get_release.outputs.tag }}
           name: TOU-Mira ${{ steps.get_release.outputs.tag }}
           files: |
-            touhats.bundle
-            touhats.catalog
+            touhats-x86.zip
+            touhats-x64.zip
           body: |
             Automated sync from AU-Avengers/TOU-Mira ${{ steps.get_release.outputs.tag }}
 
             Files:
-            - touhats.bundle
-            - touhats.catalog
+            - touhats-x86.zip
+            - touhats-x64.zip
