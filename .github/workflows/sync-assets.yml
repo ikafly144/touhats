@@ -50,6 +50,7 @@ jobs:
           # Find and move files
           find extracted -name "touhats.bundle" -exec cp {} ./touhats.bundle \;
           find extracted -name "touhats.catalog" -exec cp {} ./touhats.catalog \;
+          git add -N touhats.bundle touhats.catalog
 
       - name: Check for changes
         id: check_changes
