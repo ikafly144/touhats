@@ -1,0 +1,87 @@
+name: Sync Assets from TOU-Mira
+
+on:
+  schedule:
+    - cron: "0 */6 * * *" # Every 6 hours
+  workflow_dispatch: # Manual trigger
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get latest release info
+        id: get_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest_tag=$(gh release view --repo AU-Avengers/TOU-Mira --json tagName -q .tagName)
+          echo "tag=$latest_tag" >> $GITHUB_OUTPUT
+
+          # Check if we already have this tag
+          if git rev-parse "$latest_tag" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download and Extract Assets
+        if: steps.get_release.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download ${{ steps.get_release.outputs.tag }} \
+            --repo AU-Avengers/TOU-Mira \
+            --pattern "*x86-steam-itch.zip" \
+            --dir download
+
+          unzip download/*.zip -d extracted
+
+          # Find and move files
+          find extracted -name "touhats.bundle" -exec cp {} ./touhats.bundle \;
+          find extracted -name "touhats.catalog" -exec cp {} ./touhats.catalog \;
+
+      - name: Check for changes
+        id: check_changes
+        if: steps.get_release.outputs.exists == 'false'
+        run: |
+          if [ ! -f touhats.bundle ] || [ ! -f touhats.catalog ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          elif git diff --exit-code touhats.bundle touhats.catalog; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      - name: Commit and Push
+        if: steps.get_release.outputs.exists == 'false' && steps.check_changes.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add touhats.bundle touhats.catalog
+          git commit -m "Update assets from TOU-Mira ${{ steps.get_release.outputs.tag }}"
+          git push
+
+      - name: Create Release
+        if: steps.get_release.outputs.exists == 'false' && steps.check_changes.outputs.changed == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.get_release.outputs.tag }}
+          name: TOU-Mira ${{ steps.get_release.outputs.tag }}
+          files: |
+            touhats.bundle
+            touhats.catalog
+          body: |
+            Automated sync from AU-Avengers/TOU-Mira ${{ steps.get_release.outputs.tag }}
+
+            Files:
+            - touhats.bundle
+            - touhats.catalog
